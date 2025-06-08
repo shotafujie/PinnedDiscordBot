@@ -14,4 +14,4 @@ COPY main.py .
 EXPOSE 8000
 
 # アプリケーションを実行
-CMD ["python", "main.py"]
+CMD ["python", "app/main.py"]
