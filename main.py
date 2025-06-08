@@ -4,6 +4,7 @@ import os
 import asyncio
 from aiohttp import web
 import threading
+import time
 
 # Discord Bot設定
 intents = discord.Intents.default()
@@ -65,37 +66,52 @@ async def on_raw_reaction_remove(payload):
         except discord.HTTPException as e:
             print(f"Failed to unpin message: {e}")
 
-# Koyeb用のヘルスチェックサーバー
-async def health_check(request):
-    return web.Response(text="OK", status=200)
+# Koyeb用のヘルスチェックサーバー（シンプル版）
+def start_health_server():
+    async def health_check(request):
+        return web.Response(text="OK", status=200)
 
-async def start_health_server():
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    app.router.add_get('/health', health_check)
+    async def init_app():
+        app = web.Application()
+        app.router.add_get('/', health_check)
+        app.router.add_get('/health', health_check)
 
-    runner = web.AppRunner(app)
-    await runner.setup()
+        port = int(os.environ.get('PORT', 8000))
+        runner = web.AppRunner(app)
+        await runner.setup()
 
-    port = int(os.environ.get('PORT', 8000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    print(f"Health check server started on port {port}")
+        site = web.TCPSite(runner, '0.0.0.0', port)
+        await site.start()
+        print(f"Health check server started on port {port}")
 
-async def main():
-    # ヘルスチェックサーバーを開始
-    await start_health_server()
+        # サーバーを永続的に動作させる
+        while True:
+            await asyncio.sleep(1)
 
-    # Discord Botを開始
+    # 新しいイベントループで実行
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_app())
+
+def run_discord_bot():
     token = os.environ.get('DISCORD_TOKEN')
     if not token:
         print("Error: DISCORD_TOKEN environment variable not set")
         return
 
     try:
-        await bot.start(token)
+        bot.run(token)
     except Exception as e:
         print(f"Error starting bot: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # ヘルスチェックサーバーを別スレッドで開始
+    health_thread = threading.Thread(target=start_health_server, daemon=True)
+    health_thread.start()
+
+    # 少し待ってからDiscordBotを開始
+    time.sleep(2)
+    print("Starting Discord bot...")
+
+    # メインスレッドでDiscordBotを実行
+    run_discord_bot()
