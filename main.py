@@ -3,176 +3,99 @@ from discord.ext import commands
 import os
 import asyncio
 from aiohttp import web
-import aiohttp
-from threading import Thread
-import time
+import threading
 
-# Intentsの設定
+# Discord Bot設定
 intents = discord.Intents.default()
 intents.message_content = True
-intents.reactions = True
-
-# Botの初期化
 bot = commands.Bot(command_prefix='!', intents=intents)
-
-# ヘルスチェック用のWebサーバー
-async def health_check(request):
-    return web.Response(text="OK", status=200)
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/health', health_check)
-    app.router.add_get('/', health_check)  # ルートパスでもOKを返す
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 8000)
-    await site.start()
-    print("Health check server started on port 8000")
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} has connected to Discord!')
-    print(f'Bot is ready and logged in as {bot.user}')
-
-    # ヘルスチェックサーバーを起動
-    await start_web_server()
+    print(f'{bot.user} has landed!')
 
 @bot.event
-async def on_reaction_add(reaction, user):
-    # Botのリアクションは無視
-    if user.bot:
-        return
-
-    # 📌 (pushpin) エモジが追加された場合
-    if str(reaction.emoji) == '📌':
-        message = reaction.message
-
-        # メッセージが既にピン留めされているかチェック
-        if message.pinned:
-            print(f"Message {message.id} is already pinned")
+async def on_raw_reaction_add(payload):
+    # ピン留め絵文字（📌）をチェック
+    if str(payload.emoji) == '📌':
+        # チャンネルとメッセージを取得
+        channel = bot.get_channel(payload.channel_id)
+        if channel is None:
             return
 
         try:
-            # メッセージをピン留め
-            await message.pin()
-            print(f"Pinned message {message.id} in channel {message.channel.name}")
+            message = await channel.fetch_message(payload.message_id)
 
-            # ピン留め成功を通知（オプション）
-            embed = discord.Embed(
-                title="📌 メッセージをピン留めしました",
-                description=f"[メッセージリンク]({message.jump_url})",
-                color=0x00ff00
-            )
-            embed.set_footer(text=f"ピン留めしたユーザー: {user.display_name}")
+            # メッセージがすでにピン留めされているかチェック
+            if not message.pinned:
+                await message.pin()
+                print(f"Message pinned in {channel.name}: {message.content[:50]}...")
 
-            await message.channel.send(embed=embed, delete_after=10)
-
+        except discord.NotFound:
+            print("Message not found")
         except discord.Forbidden:
-            # 権限がない場合
-            await message.channel.send(
-                f"{user.mention} ピン留めする権限がありません。",
-                delete_after=5
-            )
+            print("No permission to pin messages")
         except discord.HTTPException as e:
-            # その他のエラー（ピン留め上限など）
-            if e.code == 50019:  # Maximum number of pins reached
-                await message.channel.send(
-                    "このチャンネルはピン留めの上限に達しています。",
-                    delete_after=5
-                )
-            else:
-                await message.channel.send(
-                    f"ピン留めに失敗しました: {str(e)}",
-                    delete_after=5
-                )
+            print(f"Failed to pin message: {e}")
 
 @bot.event
-async def on_reaction_remove(reaction, user):
-    # Botのリアクション削除は無視
-    if user.bot:
-        return
-
-    # 📌 エモジが削除された場合
-    if str(reaction.emoji) == '📌':
-        message = reaction.message
-
-        # メッセージがピン留めされていない場合は何もしない
-        if not message.pinned:
+async def on_raw_reaction_remove(payload):
+    # ピン留め絵文字が削除された場合
+    if str(payload.emoji) == '📌':
+        channel = bot.get_channel(payload.channel_id)
+        if channel is None:
             return
 
-        # 他に📌リアクションがあるかチェック
-        pin_reactions = [r for r in message.reactions if str(r.emoji) == '📌']
+        try:
+            message = await channel.fetch_message(payload.message_id)
 
-        if not pin_reactions or pin_reactions[0].count <= 1:  # Bot分を考慮
-            try:
-                # ピン留めを解除
-                await message.unpin()
-                print(f"Unpinned message {message.id} in channel {message.channel.name}")
+            # そのメッセージにピン留め絵文字がまだあるかチェック
+            pin_reactions = [reaction for reaction in message.reactions if str(reaction.emoji) == '📌']
 
-                # ピン留め解除を通知（オプション）
-                embed = discord.Embed(
-                    title="📌 ピン留めを解除しました",
-                    description=f"[メッセージリンク]({message.jump_url})",
-                    color=0xff9900
-                )
-                embed.set_footer(text=f"解除したユーザー: {user.display_name}")
+            # ピン留め絵文字がない場合、ピン留めを解除
+            if not pin_reactions or pin_reactions[0].count == 0:
+                if message.pinned:
+                    await message.unpin()
+                    print(f"Message unpinned in {channel.name}: {message.content[:50]}...")
 
-                await message.channel.send(embed=embed, delete_after=10)
+        except discord.NotFound:
+            print("Message not found")
+        except discord.Forbidden:
+            print("No permission to unpin messages")
+        except discord.HTTPException as e:
+            print(f"Failed to unpin message: {e}")
 
-            except discord.Forbidden:
-                await message.channel.send(
-                    f"{user.mention} ピン留めを解除する権限がありません。",
-                    delete_after=5
-                )
-            except discord.HTTPException as e:
-                await message.channel.send(
-                    f"ピン留め解除に失敗しました: {str(e)}",
-                    delete_after=5
-                )
+# Koyeb用のヘルスチェックサーバー
+async def health_check(request):
+    return web.Response(text="OK", status=200)
 
-# ヘルプコマンド
-@bot.command(name='pinhelp')
-async def pin_help(ctx):
-    embed = discord.Embed(
-        title="📌 Pin Bot の使い方",
-        description="メッセージに 📌 リアクションを付けるとピン留めされます。",
-        color=0x0099ff
-    )
-    embed.add_field(
-        name="使用方法",
-        value="1. ピン留めしたいメッセージに 📌 をリアクション\n2. ピン留めを解除したい場合は 📌 リアクションを削除",
-        inline=False
-    )
-    embed.add_field(
-        name="注意事項",
-        value="• Botに適切な権限が必要です\n• チャンネルごとにピン留めは50件まで\n• 通知メッセージは10秒後に自動削除されます",
-        inline=False
-    )
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
 
-    await ctx.send(embed=embed)
+    runner = web.AppRunner(app)
+    await runner.setup()
 
-# エラーハンドリング
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        return  # コマンドが見つからない場合は無視
+    port = int(os.environ.get('PORT', 8000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Health check server started on port {port}")
 
-    print(f"Command error: {error}")
+async def main():
+    # ヘルスチェックサーバーを開始
+    await start_health_server()
 
-# Botの起動
-if __name__ == "__main__":
-    # 環境変数からトークンを取得
-    token = os.getenv('DISCORD_TOKEN')
-
+    # Discord Botを開始
+    token = os.environ.get('DISCORD_TOKEN')
     if not token:
-        print("Error: DISCORD_TOKEN environment variable not found!")
-        print("Please set your Discord bot token as an environment variable.")
-        exit(1)
+        print("Error: DISCORD_TOKEN environment variable not set")
+        return
 
     try:
-        bot.run(token)
-    except discord.LoginFailure:
-        print("Error: Invalid Discord token!")
+        await bot.start(token)
     except Exception as e:
         print(f"Error starting bot: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
