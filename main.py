@@ -1,117 +1,174 @@
 import discord
-from discord.ext import commands
 import os
-import asyncio
-from aiohttp import web
-import threading
-import time
+import dotenv
+from server import server_thread
 
-# Discord Bot設定
+# 環境変数の読み込み
+dotenv.load_dotenv()
+TOKEN = os.environ.get("DISCORD_TOKEN")
+
+# Discordのインテントを設定
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+intents.reactions = True  # リアクションのイベントを受け取るために必要
 
-@bot.event
+client = discord.Client(intents=intents)
+
+# ピン留め用の絵文字（pushpin）
+PIN_EMOJI = "📌"
+
+@client.event
 async def on_ready():
-    print(f'{bot.user} has landed!')
+    """
+    Botが起動した時のイベント
+    """
+    print(f'{client.user} がログインしました!')
+    print(f'Bot ID: {client.user.id}')
+    print('📌 リアクションでメッセージをピン留めするBotが起動しました')
 
-@bot.event
-async def on_raw_reaction_add(payload):
-    # ピン留め絵文字（📌）をチェック
-    if str(payload.emoji) == '📌':
-        # チャンネルとメッセージを取得
-        channel = bot.get_channel(payload.channel_id)
-        if channel is None:
-            return
-
-        try:
-            message = await channel.fetch_message(payload.message_id)
-
-            # メッセージがすでにピン留めされているかチェック
-            if not message.pinned:
-                await message.pin()
-                print(f"Message pinned in {channel.name}: {message.content[:50]}...")
-
-        except discord.NotFound:
-            print("Message not found")
-        except discord.Forbidden:
-            print("No permission to pin messages")
-        except discord.HTTPException as e:
-            print(f"Failed to pin message: {e}")
-
-@bot.event
-async def on_raw_reaction_remove(payload):
-    # ピン留め絵文字が削除された場合
-    if str(payload.emoji) == '📌':
-        channel = bot.get_channel(payload.channel_id)
-        if channel is None:
-            return
-
-        try:
-            message = await channel.fetch_message(payload.message_id)
-
-            # そのメッセージにピン留め絵文字がまだあるかチェック
-            pin_reactions = [reaction for reaction in message.reactions if str(reaction.emoji) == '📌']
-
-            # ピン留め絵文字がない場合、ピン留めを解除
-            if not pin_reactions or pin_reactions[0].count == 0:
-                if message.pinned:
-                    await message.unpin()
-                    print(f"Message unpinned in {channel.name}: {message.content[:50]}...")
-
-        except discord.NotFound:
-            print("Message not found")
-        except discord.Forbidden:
-            print("No permission to unpin messages")
-        except discord.HTTPException as e:
-            print(f"Failed to unpin message: {e}")
-
-# Koyeb用のヘルスチェックサーバー（シンプル版）
-def start_health_server():
-    async def health_check(request):
-        return web.Response(text="OK", status=200)
-
-    async def init_app():
-        app = web.Application()
-        app.router.add_get('/', health_check)
-        app.router.add_get('/health', health_check)
-
-        port = int(os.environ.get('PORT', 8000))
-        runner = web.AppRunner(app)
-        await runner.setup()
-
-        site = web.TCPSite(runner, '0.0.0.0', port)
-        await site.start()
-        print(f"Health check server started on port {port}")
-
-        # サーバーを永続的に動作させる
-        while True:
-            await asyncio.sleep(1)
-
-    # 新しいイベントループで実行
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_app())
-
-def run_discord_bot():
-    token = os.environ.get('DISCORD_TOKEN')
-    if not token:
-        print("Error: DISCORD_TOKEN environment variable not set")
+@client.event
+async def on_reaction_add(reaction, user):
+    """
+    リアクションが追加された時のイベント
+    📌(pushpin)リアクションが追加されたメッセージをピン留めする
+    """
+    # Botの反応は無視
+    if user.bot:
         return
 
-    try:
-        bot.run(token)
-    except Exception as e:
-        print(f"Error starting bot: {e}")
+    # pushpin絵文字かどうかチェック
+    if str(reaction.emoji) == PIN_EMOJI:
+        message = reaction.message
+
+        # 既にピン留めされているかチェック
+        if message.pinned:
+            print(f"メッセージ '{message.content[:50]}...' は既にピン留めされています")
+            return
+
+        try:
+            # メッセージをピン留め
+            await message.pin()
+
+            # ログ出力
+            print(f"メッセージをピン留めしました:")
+            print(f"  チャンネル: {message.channel.name}")
+            print(f"  作者: {message.author.name}")
+            print(f"  内容: {message.content[:100]}...")
+            print(f"  ピン留め実行者: {user.name}")
+
+            # ピン留め実行を知らせる一時的なメッセージを送信
+            pin_notification = await message.channel.send(
+                f"📌 {user.mention} がメッセージをピン留めしました！"
+            )
+
+            # 5秒後に通知メッセージを削除
+            import asyncio
+            await asyncio.sleep(5)
+            try:
+                await pin_notification.delete()
+            except discord.NotFound:
+                pass  # 既に削除されている場合は無視
+
+        except discord.Forbidden:
+            # ピン留め権限がない場合
+            await message.channel.send(
+                f"❌ {user.mention} ピン留めする権限がありません。",
+                delete_after=5
+            )
+        except discord.HTTPException as e:
+            # その他のエラー（ピン留め数上限など）
+            await message.channel.send(
+                f"❌ {user.mention} ピン留めに失敗しました: {str(e)}",
+                delete_after=5
+            )
+
+@client.event
+async def on_reaction_remove(reaction, user):
+    """
+    リアクションが削除された時のイベント
+    📌リアクションが削除されたらピン留めも解除する
+    """
+    # Botの反応は無視
+    if user.bot:
+        return
+
+    # pushpin絵文字かどうかチェック
+    if str(reaction.emoji) == PIN_EMOJI:
+        message = reaction.message
+
+        # ピン留めされていないなら何もしない
+        if not message.pinned:
+            return
+
+        # 他にpushpinリアクションがあるかチェック
+        pushpin_reactions = [r for r in message.reactions if str(r.emoji) == PIN_EMOJI]
+
+        if not pushpin_reactions or pushpin_reactions[0].count <= 1:  # Bot分を除く
+            try:
+                # ピン留めを解除
+                await message.unpin()
+
+                print(f"ピン留めを解除しました:")
+                print(f"  チャンネル: {message.channel.name}")
+                print(f"  解除実行者: {user.name}")
+
+                # ピン留め解除を知らせる一時的なメッセージを送信
+                unpin_notification = await message.channel.send(
+                    f"📌 {user.mention} がピン留めを解除しました。"
+                )
+
+                # 5秒後に通知メッセージを削除
+                import asyncio
+                await asyncio.sleep(5)
+                try:
+                    await unpin_notification.delete()
+                except discord.NotFound:
+                    pass
+
+            except discord.Forbidden:
+                await message.channel.send(
+                    f"❌ {user.mention} ピン留めを解除する権限がありません。",
+                    delete_after=5
+                )
+            except discord.HTTPException as e:
+                await message.channel.send(
+                    f"❌ {user.mention} ピン留め解除に失敗しました: {str(e)}",
+                    delete_after=5
+                )
+
+@client.event
+async def on_message(message):
+    """
+    メッセージが送信された時のイベント
+    簡単なコマンドも用意
+    """
+    # Botの発言は無視
+    if message.author.bot:
+        return
+
+    # ヘルプコマンド
+    if message.content.lower() in ['!pin help', '!pinhelp']:
+        help_message = """
+📌 **Pin Bot の使い方**
+
+このBotは 📌 (pushpin) リアクションでメッセージを簡単にピン留めできます！
+
+**使い方:**
+• ピン留めしたいメッセージに 📌 リアクションを付ける
+• ピン留めを解除したい場合は 📌 リアクションを外す
+
+**注意:**
+• Botにピン留め権限が必要です
+• 1チャンネルあたり最大50件までピン留めできます
+        """
+        await message.channel.send(help_message)
 
 if __name__ == "__main__":
-    # ヘルスチェックサーバーを別スレッドで開始
-    health_thread = threading.Thread(target=start_health_server, daemon=True)
-    health_thread.start()
+    # Koyeb用サーバーを起動
+    server_thread()
 
-    # 少し待ってからDiscordBotを開始
-    time.sleep(2)
-    print("Starting Discord bot...")
-
-    # メインスレッドでDiscordBotを実行
-    run_discord_bot()
+    # Discord Botを起動
+    if TOKEN:
+        client.run(TOKEN)
+    else:
+        print("ERROR: TOKEN環境変数が設定されていません")
