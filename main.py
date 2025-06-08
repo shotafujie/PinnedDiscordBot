@@ -2,29 +2,10 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
+from aiohttp import web
+import aiohttp
 from threading import Thread
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-# ヘルスチェック用のHTTPサーバー
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b'OK')
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, format, *args):
-        # ログ出力を無効化
-        pass
-
-def run_health_server():
-    server = HTTPServer(('0.0.0.0', 8000), HealthCheckHandler)
-    print("Health check server started on port 8000")
-    server.serve_forever()
+import time
 
 # Intentsの設定
 intents = discord.Intents.default()
@@ -34,10 +15,28 @@ intents.reactions = True
 # Botの初期化
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# ヘルスチェック用のWebサーバー
+async def health_check(request):
+    return web.Response(text="OK", status=200)
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/', health_check)  # ルートパスでもOKを返す
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8000)
+    await site.start()
+    print("Health check server started on port 8000")
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     print(f'Bot is ready and logged in as {bot.user}')
+
+    # ヘルスチェックサーバーを起動
+    await start_web_server()
 
 @bot.event
 async def on_reaction_add(reaction, user):
@@ -163,10 +162,6 @@ async def on_command_error(ctx, error):
 
 # Botの起動
 if __name__ == "__main__":
-    # ヘルスチェックサーバーをバックグラウンドで起動
-    health_thread = Thread(target=run_health_server, daemon=True)
-    health_thread.start()
-
     # 環境変数からトークンを取得
     token = os.getenv('DISCORD_TOKEN')
 
