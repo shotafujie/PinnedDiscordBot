@@ -118,37 +118,28 @@ async def on_reaction_remove(reaction, user):
         print(f"  メッセージID: {message.id}")
         print(f"  削除者: {user.name}")
 
-        # 他にpushpinリアクションがあるかチェック（修正版）
-        pushpin_reactions = None
-        for r in message.reactions:
-            if str(r.emoji) == PIN_EMOJI:
-                pushpin_reactions = r
-                break
-
+        # パラメータで渡されたreactionオブジェクトを直接使用
+        # このreactionは削除後の最新状態を持っている
         should_unpin = False
 
-        if pushpin_reactions is None:
-            print("  📌リアクションが完全に削除されました")
-            should_unpin = True
-        else:
-            # 実際のユーザー数をカウント（Bot以外）
-            real_user_count = 0
-            try:
-                async for reaction_user in pushpin_reactions.users():
-                    if not reaction_user.bot:
-                        real_user_count += 1
-                        print(f"    📌リアクションユーザー: {reaction_user.name}")
+        # 実際のユーザー数をカウント（Bot以外）
+        real_user_count = 0
+        try:
+            async for reaction_user in reaction.users():
+                if not reaction_user.bot:
+                    real_user_count += 1
+                    print(f"    📌リアクションユーザー: {reaction_user.name}")
 
-                print(f"  📌リアクション数: {pushpin_reactions.count} (Bot以外: {real_user_count})")
+            print(f"  📌リアクション数: {reaction.count} (Bot以外: {real_user_count})")
 
-                if real_user_count == 0:
-                    should_unpin = True
-                    print("  Bot以外のリアクションがなくなりました")
-            except Exception as e:
-                print(f"  リアクションユーザー取得エラー: {e}")
-                # エラーの場合は安全側に倒してカウントで判定
-                if pushpin_reactions.count <= 1:  # Bot分のみ残っている可能性
-                    should_unpin = True
+            if real_user_count == 0:
+                should_unpin = True
+                print("  Bot以外のリアクションがなくなりました")
+        except Exception as e:
+            print(f"  リアクションユーザー取得エラー: {e}")
+            # エラーの場合は安全側に倒してカウントで判定
+            if reaction.count <= 1:  # Bot分のみ残っている可能性
+                should_unpin = True
 
         if should_unpin:
             try:
