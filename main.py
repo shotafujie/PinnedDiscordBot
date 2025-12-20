@@ -1,8 +1,11 @@
 import discord
+from discord import app_commands
+from discord.ext import commands
 import os
 import dotenv
 from server import server_thread
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 # 環境変数の読み込み
 dotenv.load_dotenv()
@@ -13,34 +16,130 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True  # リアクションのイベントを受け取るために必要
 
-client = discord.Client(intents=intents)
+# discord.ext.commands.Bot に移行（スラッシュコマンド対応）
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ピン留め用の絵文字（pushpin）
 PIN_EMOJI = "📌"
 
-@client.event
+@bot.event
 async def on_ready():
     """
     Botが起動した時のイベント
     """
-    print(f'{client.user} がログインしました!')
-    print(f'Bot ID: {client.user.id}')
+    print(f'{bot.user} がログインしました!')
+    print(f'Bot ID: {bot.user.id}')
     print('📌 リアクションでメッセージをピン留めするBotが起動しました')
 
-@client.event
+    # スラッシュコマンドを同期
+    try:
+        synced = await bot.tree.sync()
+        print(f'スラッシュコマンドを {len(synced)} 個同期しました')
+    except Exception as e:
+        print(f'スラッシュコマンド同期エラー: {e}')
+
+
+@bot.tree.command(name="pinnedlist", description="ピン留めメッセージの一覧を表示します")
+@app_commands.describe(
+    user="表示するユーザー（省略時は自分のメッセージ）",
+    days="過去何日間のメッセージを表示するか（省略時は全期間）"
+)
+async def pinnedlist(
+    interaction: discord.Interaction,
+    user: discord.Member = None,
+    days: int = None
+):
+    """
+    ピン留めメッセージの一覧を表示するスラッシュコマンド
+    """
+    await interaction.response.defer(ephemeral=True)
+
+    # ユーザーが指定されていない場合は実行者を使用
+    target_user = user or interaction.user
+
+    try:
+        # チャンネルのピン留めメッセージを取得
+        pins = await interaction.channel.pins()
+
+        # ユーザーでフィルタリング
+        filtered_pins = [p for p in pins if p.author.id == target_user.id]
+
+        # 日数でフィルタリング
+        if days is not None and days > 0:
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+            filtered_pins = [p for p in filtered_pins if p.created_at >= cutoff_date]
+
+        if not filtered_pins:
+            period_text = f"過去{days}日間の" if days else ""
+            await interaction.followup.send(
+                f"📌 {target_user.display_name} さんの{period_text}ピン留めメッセージはありません。",
+                ephemeral=True
+            )
+            return
+
+        # Embedを作成
+        embed = discord.Embed(
+            title=f"📌 {target_user.display_name} さんのピン留めメッセージ一覧",
+            color=discord.Color.gold()
+        )
+
+        # メッセージリストを作成
+        message_list = []
+        for pin in filtered_pins:
+            # メッセージ冒頭の10文字を取得（改行を除去）
+            content_preview = pin.content.replace('\n', ' ')[:10]
+            if len(pin.content) > 10:
+                content_preview += "..."
+
+            # メッセージが空の場合（画像のみなど）
+            if not content_preview.strip():
+                content_preview = "[添付ファイル/埋め込み]"
+
+            # メッセージリンクを作成
+            message_link = f"https://discord.com/channels/{interaction.guild_id}/{pin.channel.id}/{pin.id}"
+
+            message_list.append(f"• [{content_preview}]({message_link})")
+
+        # Embedの文字制限（4096文字）を考慮してリストを結合
+        description = "\n".join(message_list)
+        if len(description) > 4000:
+            description = description[:4000] + "\n...（以降省略）"
+
+        embed.description = description
+
+        # フッターに件数を表示
+        period_text = f"（過去{days}日間）" if days else ""
+        embed.set_footer(text=f"合計 {len(filtered_pins)} 件{period_text}")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "❌ ピン留めメッセージを取得する権限がありません。",
+            ephemeral=True
+        )
+    except Exception as e:
+        print(f"pinnedlistコマンドエラー: {e}")
+        await interaction.followup.send(
+            f"❌ エラーが発生しました: {str(e)}",
+            ephemeral=True
+        )
+
+
+@bot.event
 async def on_raw_reaction_add(payload):
     """
     リアクションが追加された時のイベント（キャッシュ不要版）
     📌(pushpin)リアクションが追加されたメッセージをピン留めする
     """
     # Botの反応は無視
-    if payload.user_id == client.user.id:
+    if payload.user_id == bot.user.id:
         return
 
     # pushpin絵文字かどうかチェック
     if str(payload.emoji) == PIN_EMOJI:
         # チャンネルとメッセージを取得
-        channel = client.get_channel(payload.channel_id)
+        channel = bot.get_channel(payload.channel_id)
         if channel is None:
             print(f"チャンネルが見つかりません (ID: {payload.channel_id})")
             return
@@ -55,10 +154,10 @@ async def on_raw_reaction_add(payload):
             return
 
         # ユーザーを取得
-        user = client.get_user(payload.user_id)
+        user = bot.get_user(payload.user_id)
         if user is None:
             try:
-                user = await client.fetch_user(payload.user_id)
+                user = await bot.fetch_user(payload.user_id)
             except:
                 user = None
 
@@ -119,20 +218,20 @@ async def on_raw_reaction_add(payload):
                 delete_after=5
             )
 
-@client.event
+@bot.event
 async def on_raw_reaction_remove(payload):
     """
     リアクションが削除された時のイベント（キャッシュ不要版）
     📌リアクションが削除されたらピン留めも解除する
     """
     # Botの反応は無視
-    if payload.user_id == client.user.id:
+    if payload.user_id == bot.user.id:
         return
 
     # pushpin絵文字かどうかチェック
     if str(payload.emoji) == PIN_EMOJI:
         # チャンネルとメッセージを取得
-        channel = client.get_channel(payload.channel_id)
+        channel = bot.get_channel(payload.channel_id)
         if channel is None:
             print(f"チャンネルが見つかりません (ID: {payload.channel_id})")
             return
@@ -147,10 +246,10 @@ async def on_raw_reaction_remove(payload):
             return
 
         # ユーザーを取得
-        user = client.get_user(payload.user_id)
+        user = bot.get_user(payload.user_id)
         if user is None:
             try:
-                user = await client.fetch_user(payload.user_id)
+                user = await bot.fetch_user(payload.user_id)
             except:
                 user = None
 
@@ -254,7 +353,7 @@ async def on_raw_reaction_remove(payload):
         else:
             print("  他のユーザーの📌リアクションが残っているため、ピン留めを維持します")
 
-@client.event
+@bot.event
 async def on_error(event, *args, **kwargs):
     """
     エラーハンドリング
@@ -263,7 +362,7 @@ async def on_error(event, *args, **kwargs):
     import traceback
     traceback.print_exc()
 
-@client.event
+@bot.event
 async def on_message(message):
     """
     メッセージが送信された時のイベント
@@ -283,6 +382,11 @@ async def on_message(message):
 **使い方:**
 • ピン留めしたいメッセージに 📌 リアクションを付ける
 • ピン留めを解除したい場合は 📌 リアクションを外す
+
+**スラッシュコマンド:**
+• `/pinnedlist` - 自分のピン留めメッセージ一覧を表示
+• `/pinnedlist user:@ユーザー` - 指定ユーザーのピン留めメッセージを表示
+• `/pinnedlist days:7` - 過去7日間のピン留めメッセージを表示
 
 **注意:**
 • Botにピン留め権限が必要です
@@ -305,10 +409,10 @@ async def on_message(message):
             pins = await message.channel.pins()
             await message.channel.send(
                 f"**Bot状態:**\n"
-                f"• Bot名: {client.user.name}\n"
+                f"• Bot名: {bot.user.name}\n"
                 f"• 現在のピン留め数: {len(pins)}/50\n"
                 f"• 権限: {'✅' if message.channel.permissions_for(message.guild.me).manage_messages else '❌'} メッセージ管理\n"
-                f"• 稼働時間: {discord.utils.utcnow() - client.user.created_at}"
+                f"• 稼働時間: {discord.utils.utcnow() - bot.user.created_at}"
             )
         except Exception as e:
             await message.channel.send(f"ステータス取得エラー: {e}")
@@ -320,6 +424,6 @@ if __name__ == "__main__":
     # Discord Botを起動
     if TOKEN:
         print("Discord Botを起動しています...")
-        client.run(TOKEN)
+        bot.run(TOKEN)
     else:
         print("ERROR: DISCORD_TOKEN環境変数が設定されていません")
