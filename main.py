@@ -34,25 +34,39 @@ async def check_is_self_only_pin(pin, user_id):
     Returns:
         bool: 自分だけがピン留めしている場合True
     """
+    print(f"[DEBUG] check_is_self_only_pin: メッセージID={pin.id}, チェック対象ユーザーID={user_id}")
+    print(f"[DEBUG] メッセージ内容: {pin.content[:30]}...")
+    print(f"[DEBUG] リアクション数: {len(pin.reactions)}")
+
     pin_reaction = None
     for reaction in pin.reactions:
+        print(f"[DEBUG] リアクション: {reaction.emoji} (count={reaction.count})")
         if str(reaction.emoji) == PIN_EMOJI:
             pin_reaction = reaction
+            print(f"[DEBUG] 📌リアクションを発見！")
             break
 
     if pin_reaction is None:
+        print(f"[DEBUG] 📌リアクションが見つかりませんでした")
         return False
 
     reaction_users = []
     async for user in pin_reaction.users():
+        print(f"[DEBUG] リアクションユーザー: {user.name} (ID={user.id}, bot={user.bot})")
         if not user.bot:
             reaction_users.append(user)
 
+    print(f"[DEBUG] Bot以外のリアクションユーザー数: {len(reaction_users)}")
+    if len(reaction_users) > 0:
+        print(f"[DEBUG] リアクションユーザーID: {[u.id for u in reaction_users]}")
+
     # 自分だけがリアクションしている場合のみTrue
-    return (
+    is_self_only = (
         len(reaction_users) == 1 and
         reaction_users[0].id == user_id
     )
+    print(f"[DEBUG] 結果: is_self_only={is_self_only}")
+    return is_self_only
 
 
 @bot.event
