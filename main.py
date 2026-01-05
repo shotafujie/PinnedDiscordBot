@@ -23,6 +23,38 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ピン留め用の絵文字（pushpin）
 PIN_EMOJI = "📌"
 
+
+async def check_is_self_only_pin(pin, user_id):
+    """ピン留めメッセージが自分だけのものかチェックする関数
+
+    Args:
+        pin: ピン留めメッセージオブジェクト
+        user_id: チェックするユーザーのID
+
+    Returns:
+        bool: 自分だけがピン留めしている場合True
+    """
+    pin_reaction = None
+    for reaction in pin.reactions:
+        if str(reaction.emoji) == PIN_EMOJI:
+            pin_reaction = reaction
+            break
+
+    if pin_reaction is None:
+        return False
+
+    reaction_users = []
+    async for user in pin_reaction.users():
+        if not user.bot:
+            reaction_users.append(user)
+
+    # 自分だけがリアクションしている場合のみTrue
+    return (
+        len(reaction_users) == 1 and
+        reaction_users[0].id == user_id
+    )
+
+
 @bot.event
 async def on_ready():
     """
@@ -51,7 +83,7 @@ async def pinnedlist(
     days: int = None
 ):
     """
-    ピン留めメッセージの一覧を表示し、自分のメッセージはまとめて解除できるスラッシュコマンド
+    ピン留めメッセージの一覧を表示し、自分だけがピン留めしているメッセージはまとめて解除できるスラッシュコマンド
     """
     await interaction.response.defer(ephemeral=True)
 
@@ -87,9 +119,9 @@ async def pinnedlist(
             color=discord.Color.gold()
         )
 
-        # メッセージリストを作成（自分/他人を区別）
+        # メッセージリストを作成（リアクションベース判定）
         message_list = []
-        my_pins = []  # 自分のピン（解除用）
+        my_pins = []  # 自分だけがピン留めしているメッセージ（解除用）
         my_id = interaction.user.id
 
         for pin in filtered_pins:
@@ -105,13 +137,15 @@ async def pinnedlist(
             # メッセージリンクを作成
             message_link = f"https://discord.com/channels/{interaction.guild_id}/{pin.channel.id}/{pin.id}"
 
-            # 自分のメッセージか他人のメッセージかで表示を変える
-            if pin.author.id == my_id:
-                # 自分のメッセージ: 解除可能
+            # 自分だけがピン留めしているかチェック
+            is_self_only = await check_is_self_only_pin(pin, my_id)
+
+            if is_self_only:
+                # 自分だけがピン留め: 解除可能
                 message_list.append(f"📌 [{content_preview}]({message_link})")
                 my_pins.append(pin)
             else:
-                # 他人のメッセージ: 解除不可（🔒マーク + 投稿者名）
+                # 他人もピン留め or 自分はピン留めしていない: 解除不可
                 message_list.append(f"🔒 [{content_preview}]({message_link}) *by {pin.author.display_name}*")
 
         # Embedの文字制限（4096文字）を考慮してリストを結合
@@ -420,8 +454,8 @@ async def on_message(message):
 • `/pinnedlist days:7` - 過去7日間のピン留めメッセージを表示
 
 **まとめて解除:**
-自分のピン留め（📌）は選択して一括解除できます。
-他人のピン留め（🔒）は表示のみで解除できません。
+自分だけがピン留めしているメッセージ（📌）は選択して一括解除できます。
+他の人もピン留めしているメッセージ（🔒）は解除できません。
 
 **注意:**
 • Botにピン留め権限が必要です
