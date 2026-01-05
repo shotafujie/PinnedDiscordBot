@@ -42,26 +42,30 @@ async def on_ready():
 
 @bot.tree.command(name="pinnedlist", description="ピン留めメッセージの一覧を表示します")
 @app_commands.describe(
+    user="表示するユーザー（省略時は全員のメッセージ）",
     days="過去何日間のメッセージを表示するか（省略時は全期間）"
 )
 async def pinnedlist(
     interaction: discord.Interaction,
+    user: discord.Member = None,
     days: int = None
 ):
     """
-    自分のピン留めメッセージの一覧を表示し、まとめて解除できるスラッシュコマンド
+    ピン留めメッセージの一覧を表示し、自分のメッセージはまとめて解除できるスラッシュコマンド
     """
     await interaction.response.defer(ephemeral=True)
-
-    # 対象は常に実行者自身
-    target_user = interaction.user
 
     try:
         # チャンネルのピン留めメッセージを取得
         pins = await interaction.channel.pins()
 
-        # 自分のメッセージでフィルタリング
-        filtered_pins = [p for p in pins if p.author.id == target_user.id]
+        # ユーザーでフィルタリング（指定がなければ全員）
+        if user:
+            filtered_pins = [p for p in pins if p.author.id == user.id]
+            title_user = f"{user.display_name} さん"
+        else:
+            filtered_pins = pins
+            title_user = "全員"
 
         # 日数でフィルタリング
         if days is not None and days > 0:
@@ -70,20 +74,24 @@ async def pinnedlist(
 
         if not filtered_pins:
             period_text = f"過去{days}日間の" if days else ""
+            target_text = f"{user.display_name} さんの" if user else ""
             await interaction.followup.send(
-                f"📌 あなたの{period_text}ピン留めメッセージはこのチャンネルにありません。",
+                f"📌 {target_text}{period_text}ピン留めメッセージはこのチャンネルにありません。",
                 ephemeral=True
             )
             return
 
         # Embedを作成
         embed = discord.Embed(
-            title=f"📌 あなたのピン留めメッセージ一覧",
+            title=f"📌 {title_user}のピン留めメッセージ一覧",
             color=discord.Color.gold()
         )
 
-        # メッセージリストを作成
+        # メッセージリストを作成（自分/他人を区別）
         message_list = []
+        my_pins = []  # 自分のピン（解除用）
+        my_id = interaction.user.id
+
         for pin in filtered_pins:
             # メッセージ冒頭の10文字を取得（改行を除去）
             content_preview = pin.content.replace('\n', ' ')[:10]
@@ -97,7 +105,14 @@ async def pinnedlist(
             # メッセージリンクを作成
             message_link = f"https://discord.com/channels/{interaction.guild_id}/{pin.channel.id}/{pin.id}"
 
-            message_list.append(f"• [{content_preview}]({message_link})")
+            # 自分のメッセージか他人のメッセージかで表示を変える
+            if pin.author.id == my_id:
+                # 自分のメッセージ: 解除可能
+                message_list.append(f"📌 [{content_preview}]({message_link})")
+                my_pins.append(pin)
+            else:
+                # 他人のメッセージ: 解除不可（🔒マーク + 投稿者名）
+                message_list.append(f"🔒 [{content_preview}]({message_link}) *by {pin.author.display_name}*")
 
         # Embedの文字制限（4096文字）を考慮してリストを結合
         description = "\n".join(message_list)
@@ -108,16 +123,26 @@ async def pinnedlist(
 
         # フッターに件数を表示
         period_text = f"（過去{days}日間）" if days else ""
-        count_text = len(filtered_pins)
-        if count_text > 25:
-            embed.set_footer(text=f"合計 {count_text} 件{period_text}（解除は先頭25件まで選択可能）")
+        total_count = len(filtered_pins)
+        my_count = len(my_pins)
+
+        footer_text = f"合計 {total_count} 件{period_text}"
+        if my_count > 0:
+            if my_count > 25:
+                footer_text += f" | 📌 自分: {my_count}件（解除は先頭25件まで）"
+            else:
+                footer_text += f" | 📌 自分: {my_count}件（解除可能）"
         else:
-            embed.set_footer(text=f"合計 {count_text} 件{period_text}")
+            footer_text += " | 自分のピン留めはありません"
 
-        # 解除用のViewを作成
-        view = UnpinSelectView(filtered_pins, user_id=target_user.id)
+        embed.set_footer(text=footer_text)
 
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        # 解除用のViewを作成（自分のメッセージのみ）
+        if my_pins:
+            view = UnpinSelectView(my_pins, user_id=my_id)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        else:
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
     except discord.Forbidden:
         await interaction.followup.send(
@@ -390,11 +415,13 @@ async def on_message(message):
 • ピン留めを解除したい場合は 📌 リアクションを外す
 
 **スラッシュコマンド:**
-• `/pinnedlist` - 自分のピン留めメッセージ一覧を表示＆まとめて解除
+• `/pinnedlist` - 全員のピン留めメッセージ一覧を表示
+• `/pinnedlist user:@ユーザー` - 指定ユーザーのピン留めを表示
 • `/pinnedlist days:7` - 過去7日間のピン留めメッセージを表示
 
 **まとめて解除:**
-`/pinnedlist` を実行すると、解除したいメッセージを選択して一括解除できます。
+自分のピン留め（📌）は選択して一括解除できます。
+他人のピン留め（🔒）は表示のみで解除できません。
 
 **注意:**
 • Botにピン留め権限が必要です
