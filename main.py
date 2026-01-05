@@ -139,6 +139,13 @@ async def pinnedlist(
         my_id = interaction.user.id
 
         for pin in filtered_pins:
+            # リアクション情報を取得するためにメッセージを再取得
+            try:
+                pin = await interaction.channel.fetch_message(pin.id)
+            except discord.NotFound:
+                continue  # メッセージが削除されている場合はスキップ
+            except discord.Forbidden:
+                continue  # 権限エラーの場合はスキップ
             # メッセージ冒頭の10文字を取得（改行を除去）
             content_preview = pin.content.replace('\n', ' ')[:10]
             if len(pin.content) > 10:
